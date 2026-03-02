@@ -158,7 +158,9 @@ def gaussian_blur(
         # apply the convolution
         slices = [None] * (ndim + 2)
         slices[dim + 2] = slice(None)
-        kernel_dim = kernel[slices]
+        # Torch 2.9+ deprecates non-tuple sequence indexing for
+        # multidimensional tensors.
+        kernel_dim = kernel[tuple(slices)]
         conv = getattr(torch.nn.functional, f'conv{ndim}d')
         blurred = conv(blurred, kernel_dim, groups=image.shape[0], padding="same")
 

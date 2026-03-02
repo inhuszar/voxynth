@@ -259,7 +259,9 @@ def image_augment(
                 indices = [slice(0, s) for s in shape]
                 axis = np.random.randint(ndim)
                 indices[axis] = np.random.randint(shape[axis])
-                cimg[indices] = np.random.rand()
+                # Torch 2.9+ deprecates non-tuple sequence indexing for
+                # multidimensional tensors.
+                cimg[tuple(indices)] = np.random.rand()
 
         # add gaussian noise across the entire image
         if chance(added_noise_probability):
