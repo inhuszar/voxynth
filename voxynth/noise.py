@@ -1,7 +1,6 @@
 import math
 import numpy as np
 import torch
-import voxynth
 
 from typing import List
 from torch import Tensor
