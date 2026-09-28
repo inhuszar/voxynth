@@ -151,8 +151,13 @@ def compose_affine(
     scale : Tensor, optional
         The scaling factor. Can be scalar or vector of size `ndim`.
     shear : Tensor, optional
-        The shearing parameters. Must be a scalar value for 2D affine matrices, 
-        and a tensor of size 3 for 3D affine matrices.
+        The shearing parameters. For 2D affine matrices, a tensor of size 2
+        sets the (0, 1) and (1, 0) entries of the shear matrix; a scalar or a
+        tensor of size 1 sets only the (0, 1) entry (legacy form). For 3D
+        affine matrices, a tensor of size 6 sets the (0, 1), (0, 2), (1, 0),
+        (1, 2), (2, 0) and (2, 1) entries; a tensor of size 3 sets only the
+        (0, 1), (0, 2) and (1, 2) entries (legacy form); a scalar is repeated
+        across all 6 entries.
     degrees : bool, optional
         Whether to interpret the rotation angles as degrees.
     device : torch.device, optional
@@ -185,12 +190,22 @@ def compose_affine(
         raise ValueError(f'scale must be of size {ndim}')
 
     # check shearing
+    # The legacy (pre-consolidation) forms are kept so that existing callers
+    # get identical matrices: 2D takes one factor (the (0, 1) entry) and 3D
+    # takes three factors (the (0, 1), (0, 2) and (1, 2) entries). They are
+    # expanded here to the full off-diagonal parameterisation.
     expected = 6 if ndim == 3 else 2
     shear = torch.zeros(expected) if shear is None else torch.as_tensor(shear)
     if shear.ndim == 0:
-        shear = shear.repeat(expected)
-    if shear.shape[0] != expected:
-        raise ValueError(f'shear must be of shape ({expected},)')
+        shear = shear.view(1) if ndim == 2 else shear.repeat(expected)
+    if ndim == 2 and shear.shape[0] == 1:
+        shear = torch.cat([shear, torch.zeros_like(shear)])
+    elif ndim == 3 and shear.shape[0] == 3:
+        zero = torch.zeros_like(shear[:1])
+        shear = torch.cat([shear[0:2], zero, shear[2:3], zero, zero])
+    if shear.ndim != 1 or shear.shape[0] != expected:
+        legacy = 3 if ndim == 3 else 1
+        raise ValueError(f'shear must be of shape ({expected},) or ({legacy},)')
 
     # start from translation
     T = torch.eye(ndim + 1, dtype=torch.float64)
@@ -272,10 +287,10 @@ def random_affine(
     ndim: int,
     max_translation: float = 0,
     max_rotation: float = 0,
-    max_shearing: float = 0,        
     max_scaling: float = 1,
     device: torch.device = None,
-    sampling: bool = True) -> Tensor:
+    sampling: bool = True,
+    max_shearing: float = 0) -> Tensor:
     """
     Parameters
     ----------
@@ -287,12 +302,14 @@ def random_affine(
     max_rotation : float
         Range to sample rotation parameters from. Scalar values define the max
         deviation from 0.0 (-max_rotation, max_rotation).
-    max_shearing : float
-        Range to sample shearing parameters from. Scalar values define the max
-        deviation from 0.0 (-max_shearing, max_shearing).
     max_scaling : float
         Max to sample scale parameters from.
         It is converted into a 2-element array defines the (min, max) deviation from 1.0.
+    max_shearing : float
+        Range to sample shearing parameters from. Scalar values define the max
+        deviation from 0.0 (-max_shearing, max_shearing). With the default of
+        0 no shear is applied and no random numbers are drawn for it, so the
+        random stream matches earlier releases.
 
     Returns
     -------
@@ -325,8 +342,13 @@ def random_affine(
         scale = np.array(max_scaling * ndim)
 
     # Sample shearing factors
+    # Nothing is drawn when shearing is disabled, so that the global NumPy
+    # random stream (and every later augmentation draw) is unchanged for
+    # callers that do not use shearing.
     shear_size = 6 if ndim == 3 else 2
-    if (sampling):
+    if max_shearing == 0:
+        shear = np.zeros(shear_size)
+    elif (sampling):
         shearing_range = sorted([-max_shearing, max_shearing])
         shear = np.random.uniform(*shearing_range, size=shear_size)
     else:
@@ -547,11 +569,11 @@ def random_transform(
     warp_smoothing_range : List[int] = [10, 20],
     warp_magnitude_range : List[int] = [1, 2],
     voxsize : int = 1,
-    max_shearing : float = 0,
     device : torch.device = None,
     isdisp : bool = True,
     perlin_method: str = 'upsample',
     sampling: bool = True,
+    max_shearing : float = 0,
     ) -> Tensor:
     """
     generate a randomly sampled transform
